@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>国際信号旗 エンコーダー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4">
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-bold text-center mb-1 text-sky-400">⛵ 国際信号旗 エンコーダー</h1>
+  <p class="text-center text-gray-400 text-sm mb-4">ICS国際信号旗（A〜Z・0〜9）でメッセージをビジュアル変換</p>
+
+  <!-- Input -->
+  <div class="bg-gray-800 rounded-lg p-4 mb-4">
+    <label for="msgInput" class="block text-sm text-gray-400 mb-2">メッセージを入力（アルファベット・数字）</label>
+    <div class="flex gap-2">
+      <input type="text" id="msgInput"
+        class="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white uppercase focus:outline-none focus:border-sky-500"
+        placeholder="例: SOS, HELLO"
+        maxlength="12"
+        aria-label="信号旗に変換するメッセージ">
+      <button id="clearBtn"
+        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+        aria-label="クリア">クリア</button>
+      <button id="copyFlagListBtn"
+        class="px-4 py-2 bg-sky-700 hover:bg-sky-600 rounded text-sm"
+        aria-label="旗名リストをコピー">📋 旗名コピー</button>
+    </div>
+  </div>
+
+  <!-- Flag Canvas Display -->
+  <div class="bg-gray-800 rounded-lg p-4 mb-4">
+    <div class="text-gray-400 text-xs mb-3">信号旗ビジュアル</div>
+    <canvas id="flagCanvas" width="700" height="120" class="w-full rounded bg-gray-950"></canvas>
+    <div id="flagMeaning" class="mt-2 text-xs text-sky-300"></div>
+  </div>
+
+  <!-- Single flag meaning -->
+  <div class="bg-gray-800 rounded-lg p-4 mb-4">
+    <div class="text-gray-400 text-xs mb-2">単旗の意味（入力の最初の文字）</div>
+    <div id="singleMeaning" class="text-gray-200 text-sm"></div>
+  </div>
+
+  <!-- Reference grid -->
+  <div class="bg-gray-800 rounded-lg p-4">
+    <div class="text-gray-400 text-xs mb-3">旗データ一覧（クリックで入力）</div>
+    <canvas id="refCanvas" width="700" height="520" class="w-full rounded bg-gray-950cursor-pointer"></canvas>
+  </div>
+</div>
+
+<script>
+// ICS Flag data: { fill patterns for canvas drawing }
+// Each flag: { colors: [bg, patterns...], draw: function }
+const FLAG_COLORS = {
+  'A': {colors:['#fff','#00a'], desc:'ダイバー潜水中 / 通行注意', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#00a'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+w*0.55,y+h/2); ctx.lineTo(x,y+h); ctx.closePath(); ctx.fill();
+  }},
+  'B': {colors:['#f00'], desc:'危険物積載中', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w,h);
+    // swallowtail cut
+    ctx.fillStyle='#111827'; ctx.beginPath(); ctx.moveTo(x+w*0.7,y); ctx.lineTo(x+w,y+h/2); ctx.lineTo(x+w*0.7,y+h); ctx.closePath(); ctx.fill();
+  }},
+  'C': {colors:['#00f','#fff','#f00'], desc:'YES（肯定）', draw:(ctx,x,y,w,h) => {
+    const s = h/5; ['#00f','#fff','#f00','#fff','#00f'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillRect(x,y+i*s,w,s); });
+  }},
+  'D': {colors:['#ff0','#00f','#ff0'], desc:'機関障害 / 離れよ', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#ff0'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#00f'; ctx.fillRect(x+w/3,y,w/3,h);
+  }},
+  'E': {colors:['#00f','#f00'], desc:'針路を右に変えよ', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#00a'; ctx.fillRect(x,y,w/2,h);
+    ctx.fillStyle='#c00'; ctx.fillRect(x+w/2,y,w/2,h);
+  }},
+  'F': {colors:['#fff','#f00'], desc:'機関障害あり通信要請', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#c00'; ctx.beginPath(); ctx.arc(x+w/2,y+h/2,Math.min(w,h)*0.28,0,Math.PI*2); ctx.fill();
+  }},
+  'G': {colors:['#ff0','#00f'], desc:'水先案内人要請', draw:(ctx,x,y,w,h) => {
+    const cols = 6; const cw = w/cols;
+    for(let i=0;i<cols;i++) { ctx.fillStyle=i%2===0?'#ff0':'#00a'; ctx.fillRect(x+i*cw,y,cw,h); }
+  }},
+  'H': {colors:['#fff','#f00'], desc:'衛生官立会い要請', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y,w/2,h);
+    ctx.fillStyle='#c00'; ctx.fillRect(x+w/2,y,w/2,h);
+  }},
+  'I': {colors:['#ff0','#000'], desc:'右舷に変針中', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#ff0'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(x+w/2,y+h/2,Math.min(w,h)*0.28,0,Math.PI*2); ctx.fill();
+  }},
+  'J': {colors:['#00f','#fff','#00f'], desc:'火災・爆発の危険', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#00a'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#fff'; ctx.fillRect(x+w*0.3,y,w*0.4,h);
+    ctx.fillStyle='#00a'; ctx.fillRect(x+w*0.4,y,w*0.2,h);
+  }},
+  'K': {colors:['#ff0','#00f'], desc:'通信を希望', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#ff0'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#00a'; ctx.beginPath(); ctx.moveTo(x+w*0.45,y); ctx.lineTo(x+w,y+h/2); ctx.lineTo(x+w*0.45,y+h); ctx.closePath(); ctx.fill();
+  }},
+  'L': {colors:['#ff0','#000'], desc:'停船せよ / 検疫', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#ff0'; ctx.fillRect(x,y,w/2,h/2); ctx.fillRect(x+w/2,y+h/2,w/2,h/2);
+    ctx.fillStyle='#111'; ctx.fillRect(x+w/2,y,w/2,h/2); ctx.fillRect(x,y+h/2,w/2,h/2);
+  }},
+  'M': {colors:['#fff','#00f'], desc:'医師が乗っています', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#00a'; ctx.beginPath(); ctx.moveTo(x+w/2,y+h*0.1); ctx.lineTo(x+w*0.9,y+h*0.9); ctx.lineTo(x+w*0.1,y+h*0.9); ctx.closePath(); ctx.fill();
+  }},
+  'N': {colors:['#00f','#fff'], desc:'NO（否定）', draw:(ctx,x,y,w,h) => {
+    const s = h/4; ['#00a','#fff','#00a','#fff'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillRect(x,y+i*s,w,s); });
+  }},
+  'O': {colors:['#ff0','#f00'], desc:'人員落下', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#ff0'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#c00'; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+w,y); ctx.lineTo(x,y+h); ctx.closePath(); ctx.fill();
+  }},
+  'P': {colors:['#fff','#00f'], desc:'出港準備完了', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#00a'; ctx.fillRect(x+w*0.25,y+h*0.25,w*0.5,h*0.5);
+  }},
+  'Q': {colors:['#ff0'], desc:'検疫完了・入港許可要請', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#ff0'; ctx.fillRect(x,y,w,h);
+  }},
+  'R': {colors:['#f00','#ff0'], desc:'（単独では使用しない）', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#ff0'; ctx.beginPath(); ctx.arc(x+w/2,y+h/2,Math.min(w,h)*0.25,0,Math.PI*2); ctx.fill();
+  }},
+  'S': {colors:['#fff','#00f'], desc:'機関後進中', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#00a'; ctx.beginPath(); ctx.arc(x+w/2,y+h/2,Math.min(w,h)*0.3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x+w/2,y+h/2,Math.min(w,h)*0.18,0,Math.PI*2); ctx.fill();
+  }},
+  'T': {colors:['#f00','#fff','#00f'], desc:'医師を引き連れてきてください', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w/3,h);
+    ctx.fillStyle='#fff'; ctx.fillRect(x+w/3,y,w/3,h);
+    ctx.fillStyle='#00a'; ctx.fillRect(x+w*2/3,y,w/3,h);
+  }},
+  'U': {colors:['#f00','#fff'], desc:'貴船は危険水域に向かっています', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w/2,h/2); ctx.fillRect(x+w/2,y+h/2,w/2,h/2);
+    ctx.fillStyle='#fff'; ctx.fillRect(x+w/2,y,w/2,h/2); ctx.fillRect(x,y+h/2,w/2,h/2);
+  }},
+  'V': {colors:['#f00','#fff'], desc:'救助を要請', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#fff';
+    ctx.font = `bold ${Math.round(h*0.6)}px sans-serif`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('V',x+w/2,y+h/2);
+  }},
+  'W': {colors:['#c00','#fff','#00a'], desc:'医療援助を要請', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#fff'; ctx.fillRect(x+w*0.25,y,w*0.5,h);
+    ctx.fillStyle='#00a'; ctx.fillRect(x+w*0.4,y,w*0.2,h);
+  }},
+  'X': {colors:['#fff','#00a'], desc:'作業を中止し指示を待て', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#00a'; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+w,y+h); ctx.stroke();
+    ctx.lineWidth=h*0.12; ctx.strokeStyle='#00a';
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+w,y+h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+w,y); ctx.lineTo(x,y+h); ctx.stroke();
+    ctx.lineWidth=1;
+  }},
+  'Y': {colors:['#ff0','#f00'], desc:'錨を引き上げている', draw:(ctx,x,y,w,h) => {
+    const cols = 8; const cw = w/cols;
+    for(let i=0;i<cols;i++) { ctx.fillStyle=i%2===0?'#ff0':'#c00'; ctx.fillRect(x+i*cw,y,cw,h/2); ctx.fillStyle=i%2===0?'#c00':'#ff0'; ctx.fillRect(x+i*cw,y+h/2,cw,h/2); }
+  }},
+  'Z': {colors:['#ff0','#00a','#f00'], desc:'タグボートを要請 / 漁船', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#ff0'; ctx.fillRect(x,y,w/2,h/2); ctx.fillRect(x+w/2,y+h/2,w/2,h/2);
+    ctx.fillStyle='#c00'; ctx.fillRect(x+w/2,y,w/2,h/2); ctx.fillRect(x,y+h/2,w/2,h/2);
+    ctx.fillStyle='#111'; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+w,y+h); ctx.lineTo(x+w/2,y+h); ctx.lineTo(x,y+h/2); ctx.closePath(); ctx.fill();
+  }},
+  '0': {colors:['#ff0','#c00'], desc:'０', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#ff0'; ctx.fillRect(x+w*0.2,y+h*0.2,w*0.6,h*0.6);
+  }},
+  '1': {colors:['#c00','#fff','#00a'], desc:'１', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w,h*0.4);
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y+h*0.4,w,h*0.2);
+    ctx.fillStyle='#00a'; ctx.fillRect(x,y+h*0.6,w,h*0.4);
+  }},
+  '2': {colors:['#00a','#fff'], desc:'２', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#00a'; ctx.fillRect(x,y,w/2,h); ctx.fillRect(x+w/2,y,w/2,h/2);
+    ctx.fillStyle='#fff'; ctx.fillRect(x+w/2,y+h/2,w/2,h/2);
+  }},
+  '3': {colors:['#c00','#fff'], desc:'３', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w,h/2);
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y+h/2,w,h/2);
+    ctx.fillStyle='#c00'; ctx.fillRect(x+w*0.3,y+h*0.1,w*0.4,h*0.8);
+  }},
+  '4': {colors:['#c00','#fff','#00a'], desc:'４', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w/3,h); ctx.fillRect(x+w*2/3,y,w/3,h);
+    ctx.fillStyle='#fff'; ctx.fillRect(x+w/3,y,w/3,h);
+  }},
+  '5': {colors:['#ff0','#c00'], desc:'５', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#ff0'; for(let i=0;i<3;i++) ctx.fillRect(x+w*0.1,y+h*(0.15+i*0.28),w*0.8,h*0.15);
+  }},
+  '6': {colors:['#fff','#00a'], desc:'６', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='#00a'; ctx.fillRect(x+w*0.15,y+h*0.15,w*0.7,h*0.7);
+  }},
+  '7': {colors:['#ff0','#c00','#00a'], desc:'７', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#ff0'; ctx.fillRect(x,y,w,h/3);
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y+h/3,w,h/3);
+    ctx.fillStyle='#00a'; ctx.fillRect(x,y+h*2/3,w,h/3);
+  }},
+  '8': {colors:['#c00','#ff0'], desc:'８', draw:(ctx,x,y,w,h) => {
+    const cols=4; const cw=w/cols;
+    for(let i=0;i<cols;i++) for(let j=0;j<cols;j++) { ctx.fillStyle=(i+j)%2===0?'#c00':'#ff0'; ctx.fillRect(x+i*cw,y+j*(h/cols),cw,h/cols); }
+  }},
+  '9': {colors:['#fff','#00a','#c00'], desc:'９', draw:(ctx,x,y,w,h) => {
+    ctx.fillStyle='#fff'; ctx.fillRect(x,y,w,h/3);
+    ctx.fillStyle='#00a'; ctx.fillRect(x,y+h/3,w,h/3);
+    ctx.fillStyle='#c00'; ctx.fillRect(x,y+h*2/3,w,h/3);
+    ctx.fillStyle='#fff'; ctx.fillRect(x+w*0.35,y,w*0.3,h);
+  }},
+};
+
+const canvas = document.getElementById('flagCanvas');
+const ctx = canvas.getContext('2d');
+const refCanvas = document.getElementById('refCanvas');
+const rctx = refCanvas.getContext('2d');
+
+function drawFlag(c, x, y, w, h, label, ctx2) {
+  const flagData = FLAG_COLORS[c.toUpperCase()];
+  if (!flagData) {
+    ctx2.fillStyle = '#374151'; ctx2.fillRect(x,y,w,h);
+    ctx2.fillStyle = '#9ca3af'; ctx2.font = `bold ${h*0.4}px sans-serif`; ctx2.textAlign='center'; ctx2.textBaseline='middle';
+    ctx2.fillText('?', x+w/2, y+h/2);
+  } else {
+    flagData.draw(ctx2, x, y, w, h);
+  }
+  // border
+  ctx2.strokeStyle = '#475569'; ctx2.lineWidth = 1;
+  ctx2.strokeRect(x, y, w, h);
+  // label
+  if (label) {
+    ctx2.fillStyle = '#e2e8f0'; ctx2.font = `bold ${Math.max(8,h*0.22)}px sans-serif`;
+    ctx2.textAlign = 'center'; ctx2.textBaseline = 'top';
+    ctx2.fillText(c.toUpperCase(), x+w/2, y+h+2);
+  }
+}
+
+function renderFlags(text) {
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#030712'; ctx.fillRect(0,0,W,H);
+  if (!text) return;
+  const chars = text.toUpperCase().replace(/[^A-Z0-9]/g,'').split('');
+  if (!chars.length) return;
+  const fw = Math.min(90, Math.floor((W - 20) / chars.length) - 8);
+  const fh = Math.round(fw * 1.3);
+  const totalW = chars.length * (fw + 8);
+  let startX = (W - totalW) / 2;
+  const startY = (H - fh - 20) / 2;
+
+  chars.forEach((ch, i) => {
+    drawFlag(ch, startX + i*(fw+8), startY, fw, fh, true, ctx);
+  });
+
+  // Meaning
+  const meaningDiv = document.getElementById('flagMeaning');
+  const parts = chars.map(ch => {
+    const d = FLAG_COLORS[ch];
+    return ch + (d ? `(${d.desc})` : '');
+  });
+  meaningDiv.textContent = parts.join(' ▸ ');
+
+  // Single flag meaning
+  const singleDiv = document.getElementById('singleMeaning');
+  if (chars.length > 0) {
+    const d = FLAG_COLORS[chars[0]];
+    singleDiv.textContent = chars[0] + '旗: ' + (d ? d.desc : '不明');
+  }
+}
+
+// Render reference grid
+function renderRef() {
+  const W = refCanvas.width;
+  rctx.fillStyle = '#030712'; rctx.fillRect(0,0,W,refCanvas.height);
+  const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
+  const cols = 9;
+  const fw = Math.floor((W - 20) / cols) - 6;
+  const fh = Math.round(fw * 1.2);
+  const xpad = 10, ypad = 10;
+  keys.forEach((ch, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = xpad + col * (fw + 6);
+    const y = ypad + row * (fh + 20);
+    drawFlag(ch, x, y, fw, fh, true, rctx);
+  });
+}
+
+refCanvas.addEventListener('click', (e) => {
+  const rect = refCanvas.getBoundingClientRect();
+  const scaleX = refCanvas.width / rect.width;
+  const mx = (e.clientX - rect.left) * scaleX;
+  const my = (e.clientY - rect.top) * (refCanvas.height / rect.height);
+  const W = refCanvas.width;
+  const cols = 9;
+  const fw = Math.floor((W - 20) / cols) - 6;
+  const fh = Math.round(fw * 1.2);
+  const xpad = 10, ypad = 10;
+  const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
+  keys.forEach((ch, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = xpad + col * (fw + 6);
+    const y = ypad + row * (fh + 20);
+    if (mx >= x && mx <= x+fw && my >= y && my <= y+fh) {
+      const inp = document.getElementById('msgInput');
+      if (inp.value.length < 12) { inp.value += ch; renderFlags(inp.value); }
+    }
+  });
+});
+
+document.getElementById('msgInput').addEventListener('input', function() {
+  renderFlags(this.value);
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  document.getElementById('msgInput').value = '';
+  ctx.fillStyle='#030712'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  document.getElementById('flagMeaning').textContent = '';
+  document.getElementById('singleMeaning').textContent = '';
+});
+
+document.getElementById('copyFlagListBtn').addEventListener('click', () => {
+  const text = document.getElementById('msgInput').value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+  const list = text.split('').map(ch => ch + '旗').join(', ');
+  if (list) navigator.clipboard.writeText(list);
+});
+
+renderRef();
+renderFlags('SOS');
+document.getElementById('msgInput').value = 'SOS';
+</script>
+</body>
+</html>
